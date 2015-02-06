@@ -35,14 +35,12 @@
 #include <type_traits>
 
 namespace HPHP {
+struct Resumable;
 
 /**
  * These macros allow us to easily change the arguments to iop*() opcode
  * implementations.
  */
-#define IOP_ARGS        PC& pc
-#define IOP_PASS_ARGS   pc
-#define IOP_PASS(pc)    pc
 
 #define EVAL_FILENAME_SUFFIX ") : eval()'d code"
 
@@ -475,7 +473,10 @@ inline ActRec* arFromSpOffset(const ActRec *sp, int32_t offset) {
   return arAtOffset(sp, offset);
 }
 
+void frame_free_locals_no_hook(ActRec* fp);
+
 inline TypedValue* arReturn(ActRec* ar, Variant&& value) {
+  frame_free_locals_no_hook(ar);
   ar->m_r = *value.asTypedValue();
   tvWriteNull(value.asTypedValue());
   return &ar->m_r;
@@ -624,7 +625,7 @@ public:
   void popC() {
     assert(m_top != m_base);
     assert(cellIsPlausible(*m_top));
-    tvRefcountedDecRefCell(m_top);
+    tvRefcountedDecRef(m_top);
     tvDebugTrash(m_top);
     m_top++;
   }
@@ -760,26 +761,14 @@ public:
     m_top->m_type = KindOfUninit;
   }
 
-  #define PUSH_METHOD(name, type, field, value)                               \
-  ALWAYS_INLINE void push##name() {                                           \
-    assert(m_top != m_elms);                                                  \
-    m_top--;                                                                  \
-    m_top->m_data.field = value;                                              \
-    m_top->m_type = type;                                                     \
+  template<DataType t, class T> void pushVal(T v) {
+    assert(m_top != m_elms);
+    m_top--;
+    *m_top = make_tv<t>(v);
   }
-  PUSH_METHOD(True, KindOfBoolean, num, 1)
-  PUSH_METHOD(False, KindOfBoolean, num, 0)
-
-  #define PUSH_METHOD_ARG(name, type, field, argtype, arg)                    \
-  ALWAYS_INLINE void push##name(argtype arg) {                                \
-    assert(m_top != m_elms);                                                  \
-    m_top--;                                                                  \
-    m_top->m_data.field = arg;                                                \
-    m_top->m_type = type;                                                     \
-  }
-  PUSH_METHOD_ARG(Bool, KindOfBoolean, num, bool, b)
-  PUSH_METHOD_ARG(Int, KindOfInt64, num, int64_t, i)
-  PUSH_METHOD_ARG(Double, KindOfDouble, dbl, double, d)
+  ALWAYS_INLINE void pushBool(bool v) { pushVal<KindOfBoolean>(v); }
+  ALWAYS_INLINE void pushInt(int64_t v) { pushVal<KindOfInt64>(v); }
+  ALWAYS_INLINE void pushDouble(double v) { pushVal<KindOfDouble>(v); }
 
   // This should only be called directly when the caller has
   // already adjusted the refcount appropriately
@@ -882,10 +871,10 @@ public:
   }
 
   ALWAYS_INLINE
-  void replaceC(const Cell& c) {
+  void replaceC(const Cell c) {
     assert(m_top != m_base);
     assert(m_top->m_type != KindOfRef);
-    tvRefcountedDecRefCell(m_top);
+    tvRefcountedDecRef(m_top);
     *m_top = c;
   }
 
@@ -894,7 +883,7 @@ public:
   void replaceC() {
     assert(m_top != m_base);
     assert(m_top->m_type != KindOfRef);
-    tvRefcountedDecRefCell(m_top);
+    tvRefcountedDecRef(m_top);
     *m_top = make_tv<DT>();
   }
 
@@ -903,7 +892,7 @@ public:
   void replaceC(T value) {
     assert(m_top != m_base);
     assert(m_top->m_type != KindOfRef);
-    tvRefcountedDecRefCell(m_top);
+    tvRefcountedDecRef(m_top);
     *m_top = make_tv<DT>(value);
   }
 
@@ -1041,6 +1030,17 @@ visitStackElems(const ActRec* const fp,
     tvFun(cursor++);
   }
 }
+
+void resetCoverageCounters();
+
+// The interpOne*() methods implement individual opcode handlers.
+using InterpOneFunc = void (*) (ActRec* ar, Cell* sp, Offset pcOff);
+extern InterpOneFunc interpOneEntryPoints[];
+
+bool doFCallArrayTC(PC pc);
+bool doFCall(ActRec* ar, PC& pc);
+void dispatchBB();
+void pushLocalsAndIterators(const Func* func, int nparams = 0);
 
 ///////////////////////////////////////////////////////////////////////////////
 

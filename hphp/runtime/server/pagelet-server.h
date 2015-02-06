@@ -22,7 +22,8 @@
 #include <set>
 #include <deque>
 
-#include "hphp/runtime/base/complex-types.h"
+#include "hphp/runtime/base/types.h"
+#include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/server/transport.h"
 #include "hphp/runtime/server/server-task-event.h"
 
@@ -153,7 +154,7 @@ private:
   PageletServerTaskEvent *m_event;
 };
 
-class PageletServerTaskEvent : public AsioExternalThreadEvent {
+class PageletServerTaskEvent final : public AsioExternalThreadEvent {
 public:
 
   ~PageletServerTaskEvent() {
@@ -171,7 +172,7 @@ public:
 
 protected:
 
-  void unserialize(Cell& result) {
+  void unserialize(Cell& result) override final {
     // Main string responses from pagelet thread.
     Array responses = Array::Create();
 

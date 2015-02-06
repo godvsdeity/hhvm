@@ -90,4 +90,4 @@ echo $b->testMemoizedOverride()."\n";
 // Test passing a function that passes $this as an argument. This caused the
 // segfault in #5150421.
 echo $a->testPassesThis().' ';
-echo $a->testPassesThis()."\n";
+echo $a->testPassesThis();

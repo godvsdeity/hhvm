@@ -26,21 +26,29 @@ function my_option_map(): OptionInfoMap {
 'print-command'   => Pair { '',  'Just print the command, don\'t run it' },
 'region-mode:'    => Pair { '',
                             'Which region selector to use (e.g \'method\')' },
-'no-pgo'          => Pair { '', 'Diable PGO' },
-'pgo-threshold:'  => Pair { '', 'PGO threshold to use' },
+'no-pgo'          => Pair { '',  'Disable PGO' },
+'pgo-threshold:'  => Pair { '',  'PGO threshold to use' },
 'no-obj-destruct' => Pair { '',
                             'Disable global object destructors in CLI mode' },
 'zend'            => Pair { '',  'Enable ZendCompat functions and classes' },
 'arm'             => Pair { '',  'Emit ARM code and simulate it' },
-'ini-file[]'      => Pair { '',  'A .ini configuration file' },
-'hdf-file[]'      => Pair { '',  'A .hdf configuration file' },
+'ini[]'           => Pair { '',  'An .ini configuration file or CLI option' },
+'hdf[]'           => Pair { '',  'An .hdf configuration file or CLI option' },
+'no-defaults'     => Pair { '',
+                            'Do not use the default wrapper runtime options'},
+'build-root:'     => Pair { '',
+                            'Override the default directory for hhvm and hphp'},
+'perf:'           => Pair { '', 'Run perf record'},
   };
 }
 
-function get_paths(): Map<string,string> {
+function get_paths(OptionMap $opts): Map<string,string> {
   $root = __DIR__.'/../../_bin/hphp';
   if (!is_dir($root)) {
     $root = __DIR__.'/..';
+  }
+  if ($opts->containsKey('build-root')) {
+    $root = realpath($opts['build-root']);
   }
   return Map {
     'hhvm' => "$root/hhvm/hhvm",
@@ -50,17 +58,21 @@ function get_paths(): Map<string,string> {
 
 function determine_flags(OptionMap $opts): string {
   $flags = '';
+  $has_file = false;
 
-  if ($opts->containsKey('ini-file')) {
-    $flags .= parse_config_files($opts['ini-file']);
+  if ($opts->containsKey('ini')) {
+    $ret = parse_config_options($opts['ini'], "ini");
+    $flags .= $ret[0];
+    $has_file = $ret[1];
   }
-  if ($opts->containsKey('hdf-file')) {
-    $flags .= parse_config_files($opts['hdf-file']);
+  if ($opts->containsKey('hdf')) {
+    $ret = parse_config_options($opts['hdf'], "hdf");
+    $flags .= $ret[0];
+    // Don't override if we have an ini file already
+    $has_file = $has_file || $ret[1];
   }
-
-  // If $flags is still empty, we had no custom config files
-  // Use a default
-  if ($flags === "") {
+  // If no config files were given at the command line, use a default
+  if (!$has_file) {
     #
     # The cli.hdf file is where Facebook puts its in-house
     # default configuration information.
@@ -71,13 +83,15 @@ function determine_flags(OptionMap $opts): string {
     }
   }
 
-  $flags .=
-    '-v Eval.EnableHipHopSyntax=true '.
-    '-v Eval.EnableHipHopExperimentalSyntax=true '.
-    '-v Eval.JitEnableRenameFunction=0 '.
-    '-v Eval.GdbSyncChunks=1 '.
-    '-v Eval.AllowHhas=true '.
-    '';
+  if (!$opts->containsKey('no-defaults')) {
+    $flags .=
+      '-v Eval.EnableHipHopSyntax=true '.
+      '-v Eval.EnableHipHopExperimentalSyntax=true '.
+      '-v Eval.JitEnableRenameFunction=0 '.
+      '-v Eval.GdbSyncChunks=1 '.
+      '-v Eval.AllowHhas=true '.
+      '';
+  }
 
   if ($opts->containsKey('interp')) {
     $flags .=
@@ -90,9 +104,28 @@ function determine_flags(OptionMap $opts): string {
   }
 
   if ($opts->containsKey('region-mode')) {
-    $flags .=
-      '-v Eval.JitRegionSelector='.((string)$opts['region-mode']).' '.
-      '';
+    if ($opts['region-mode'] == 'method') {
+      $flags .=
+        '-v Eval.JitLoops=1 '.
+        '-v Eval.HHIRBytecodeControlFlow=1 '.
+        '-v Eval.JitPGO=0 '.
+        '';
+      if (!$opts->containsKey('compile')) {
+        echo 'Reminder: running region-mode=method without --compile is '.
+             "almost never going to work...\n";
+      }
+    }
+    if ($opts['region-mode'] == 'wholecfg') {
+      $flags .=
+        '-v Eval.JitPGORegionSelector='.((string)$opts['region-mode']).' '.
+        '-v Eval.JitLoops=1 '.
+        '-v Eval.HHIRBytecodeControlFlow=1 '.
+        '';
+    } else {
+      $flags .=
+        '-v Eval.JitRegionSelector='.((string)$opts['region-mode']).' '.
+        '';
+    }
   }
 
   $simple_args = Map {
@@ -124,12 +157,19 @@ function determine_flags(OptionMap $opts): string {
   return $flags;
 }
 
-function parse_config_files(Set $files): string {
+function parse_config_options(Set $options, string $kind): Pair<string, bool> {
   $flags = "";
-  foreach ($files as $file) {
-      $flags .= "-c " . $file . " ";
+  $has_file = false;
+  foreach ($options as $option) {
+    if (file_exists($option)) {
+      $flags .= "-c " . $option . " ";
+      $has_file = true;
+    } else {
+      $dashwhat = $kind === "ini" ? "-d " : "-v ";
+      $flags .= $dashwhat . $option . " ";
+    }
   }
-  return $flags;
+  return Pair {$flags, $has_file};
 }
 
 function determine_env(OptionMap $opts): string {
@@ -161,11 +201,12 @@ function argv_for_shell(): string {
   return $ret;
 }
 
-function compile_a_repo(bool $unoptimized, bool $echo_command): string {
+function compile_a_repo(bool $unoptimized, OptionMap $opts): string {
+  $echo_command = $opts->containsKey('print-command');
   echo "Compiling with hphp...";
 
   $hphp_out='/tmp/hphp_out'.posix_getpid();
-  $cmd = get_paths()['hphp'].' '.
+  $cmd = get_paths($opts)['hphp'].' '.
     '-v EnableHipHopSyntax=1 '.
     '-v EnableHipHopExperimentalSyntax=1 '.
     ($unoptimized ? '-v UseHHBBC=0 ' : '').
@@ -203,30 +244,33 @@ function repo_auth_flags(string $flags, string $repo): string {
     '--file ';
 }
 
-function compile_with_hphp(string $flags, bool $print): string {
-  return repo_auth_flags($flags, compile_a_repo(false, $print));
+function compile_with_hphp(string $flags, OptionMap $opts): string {
+  return repo_auth_flags($flags, compile_a_repo(false, $opts));
 }
 
-function create_repo(): void {
-  $repo = compile_a_repo(true, false);
+function create_repo(OptionMap $opts): void {
+  $repo = compile_a_repo(true, $opts);
   system("cp $repo ./hhvm.hhbc");
 }
 
 function run_hhvm(OptionMap $opts): void {
   $flags = determine_flags($opts);
   if ($opts->containsKey('create-repo')) {
-    create_repo();
+    create_repo($opts);
     exit(0);
   }
   if ($opts->containsKey('repo')) {
     $flags = repo_auth_flags($flags, (string) $opts['repo']);
   } else if ($opts->containsKey('compile')) {
-    $flags = compile_with_hphp($flags, $opts->containsKey('print-command'));
+    $flags = compile_with_hphp($flags, $opts);
   }
 
   $pfx = determine_env($opts);
   $pfx .= $opts->containsKey('gdb') ? 'gdb --args ' : '';
-  $hhvm = get_paths()['hhvm'];
+  if ($opts->containsKey('perf')) {
+    $pfx .= 'perf record -g -o ' . $opts['perf'] . ' ';
+  }
+  $hhvm = get_paths($opts)['hhvm'];
   $cmd = "$pfx $hhvm $flags ".argv_for_shell();
   if ($opts->containsKey('print-command')) {
     echo "\n$cmd\n\n";
@@ -291,10 +335,13 @@ function help(): void {
 "   % hhvm --repo hhvm.hhbbc test.php\n".
 "\n".
 "   # Specify a configuration file to be used when running your code:\n".
-"   % hhvm --ini-file test.ini test.php\n".
+"   % hhvm --ini test.ini test.php\n".
 "\n".
 "   # Specify multiple config files to be used when running your code:\n".
-"   % hhvm --ini-file a.ini --hdf-file b.hdf --ini-file c.ini test.php\n".
+"   % hhvm --ini a.ini --hdf b.hdf --ini c.ini test.php\n".
+"\n".
+"   # Specify config option(s) to be used when running your code:\n".
+"   % hhvm --ini hhvm.jit_a_size=15728640 test.php\n".
 "\n"
     ;
 }

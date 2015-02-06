@@ -13,6 +13,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
 #ifndef incl_HPHP_TYPE_CONSTRAINT_H_
 #define incl_HPHP_TYPE_CONSTRAINT_H_
 
@@ -38,7 +39,7 @@ namespace HPHP {
  * function or method parameter typehint at runtime.
  */
 struct TypeConstraint {
-  enum Flags {
+  enum Flags : uint8_t {
     NoFlags = 0x0,
 
     /*
@@ -81,7 +82,8 @@ struct TypeConstraint {
    *
    * See underlyingDataType().
    */
-  enum class MetaType { Precise, Self, Parent, Callable, Number, ArrayKey };
+  enum class MetaType : uint8_t { Precise, Self, Parent, Callable, Number,
+                                  ArrayKey };
 
   static const int32_t ReturnId = -1;
 
@@ -141,13 +143,13 @@ struct TypeConstraint {
    * KindOfObject: it may either be a type alias or a class, depending
    * on what typeName() means in a given request.
    */
-  DataType underlyingDataType() const { return m_type.dt; }
+  MaybeDataType underlyingDataType() const { return m_type.dt; }
 
   /*
    * Returns the underlying DataType for this TypeConstraint,
    * chasing down type aliases.
    */
-  DataType underlyingDataTypeResolved() const;
+  MaybeDataType underlyingDataTypeResolved() const;
 
   /*
    * Predicates for various properties of the type constraint.
@@ -237,9 +239,11 @@ struct TypeConstraint {
     verifyFail(func, tv, ReturnId);
   }
 
+  static MaybeDataType typeNameToMaybeDataType(const StringData* typeName);
+
 private:
   struct Type {
-    DataType dt;
+    MaybeDataType dt;
     MetaType metatype;
   };
   typedef hphp_hash_map<const StringData*, Type,
@@ -252,6 +256,7 @@ private:
   void init();
   void selfToTypeName(const Func* func, const StringData **typeName) const;
   void parentToTypeName(const Func* func, const StringData **typeName) const;
+  static const Type* typeNameToType(const StringData* typeName);
 
 private:
   // m_type represents the DataType to check on.  We don't know

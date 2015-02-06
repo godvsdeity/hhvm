@@ -19,43 +19,41 @@
 #include "hphp/runtime/server/fastcgi/fastcgi-session.h"
 #include "hphp/runtime/server/fastcgi/fastcgi-worker.h"
 #include "hphp/runtime/server/fastcgi/socket-connection.h"
-#include "folly/io/IOBuf.h"
-#include "folly/io/IOBufQueue.h"
-#include "thrift/lib/cpp/async/TEventBaseManager.h" // @nolint
+#include <folly/io/IOBuf.h>
+#include <folly/io/IOBufQueue.h>
+#include <folly/io/async/EventBaseManager.h> // @nolint
 #include "thrift/lib/cpp/async/TAsyncTransport.h" // @nolint
-#include "proxygen/lib/workers/WorkerThread.h" // @nolint
-#include "proxygen/lib/services/Acceptor.h" // @nolint
 
 namespace HPHP {
 
 using folly::IOBuf;
 using folly::IOBufQueue;
 using folly::io::Cursor;
-using apache::thrift::async::TEventBase;
+using folly::EventBase;
 using apache::thrift::async::TAsyncTransport;
-using apache::thrift::async::TAsyncServerSocket;
 using apache::thrift::async::TAsyncTimeout;
-using apache::thrift::transport::TSocketAddress;
 using apache::thrift::transport::TTransportException;
 
 ////////////////////////////////////////////////////////////////////////////////
 
 const int FastCGIAcceptor::k_maxConns = 50;
 const int FastCGIAcceptor::k_maxRequests = 1000;
-const TSocketAddress FastCGIAcceptor::s_unknownSocketAddress("127.0.0.1", 0);
 
-bool FastCGIAcceptor::canAccept(const TSocketAddress& address) {
+const folly::SocketAddress
+FastCGIAcceptor::s_unknownSocketAddress("127.0.0.1", 0);
+
+bool FastCGIAcceptor::canAccept(const folly::SocketAddress& address) {
   // TODO: Support server IP whitelist.
   return m_server->canAccept();
 }
 
 void FastCGIAcceptor::onNewConnection(
-    apache::thrift::async::TAsyncSocket::UniquePtr sock,
-    const apache::thrift::transport::TSocketAddress* peerAddress,
-    const std::string& nextProtocolName,
-    const ::proxygen::TransportInfo& tinfo)
+  folly::AsyncSocket::UniquePtr sock,
+  const folly::SocketAddress* peerAddress,
+  const std::string& nextProtocolName,
+  const ::folly::TransportInfo& tinfo)
 {
-  TSocketAddress localAddress;
+  folly::SocketAddress localAddress;
   try {
     sock->getLocalAddress(&localAddress);
   } catch (...) {
@@ -81,14 +79,14 @@ void FastCGIAcceptor::onConnectionsDrained() {
 
 FastCGIConnection::FastCGIConnection(
   FastCGIServer* server,
-  TAsyncTransport::UniquePtr sock,
-  const TSocketAddress& localAddr,
-  const TSocketAddress& peerAddr)
+  folly::AsyncSocket::UniquePtr sock,
+  const folly::SocketAddress& localAddr,
+  const folly::SocketAddress& peerAddr)
   : SocketConnection(std::move(sock), localAddr, peerAddr),
     m_server(server) {
   m_eventBase = m_server->getEventBaseManager()->getExistingEventBase();
   assert(m_eventBase != nullptr);
-  m_sock->setReadCallback(this);
+  m_sock->setReadCB(this);
   m_session.setCallback(this);
 }
 
@@ -132,7 +130,7 @@ bool FastCGIConnection::hasReadDataAvailable() {
   return ((chain != nullptr) && (chain->length() != 0));
 }
 
-std::shared_ptr<ProtocolSessionHandler>
+std::shared_ptr<FastCGITransport>
 FastCGIConnection::newSessionHandler(int transport_id) {
   auto transport = std::make_shared<FastCGITransport>(this, transport_id);
   m_transports[transport_id] = transport;
@@ -152,7 +150,11 @@ void FastCGIConnection::writeError(size_t bytes,
 void FastCGIConnection::writeSuccess() noexcept {
   --m_writeCount;
   if (m_writeCount == 0 && m_shutdown) {
-    delete this;
+    // Call "destroy" instead of "delete this" to make sure the DestructorGuard
+    // in readDataAvailable is able to do its thing. Needing to do this, along
+    // with having a "delete this" at all, is indicitive of just how much all
+    // of this code lacks clear lines of ownership.
+    destroy();
   }
 }
 
@@ -164,7 +166,11 @@ void FastCGIConnection::onSessionClose() {
   close();
   m_shutdown = true;
   if (m_writeCount == 0) {
-    delete this;
+    // Call "destroy" instead of "delete this" to make sure the DestructorGuard
+    // in readDataAvailable is able to do its thing. Needing to do this, along
+    // with having a "delete this" at all, is indicitive of just how much all
+    // of this code lacks clear lines of ownership.
+    destroy();
   }
 }
 
@@ -198,7 +204,7 @@ FastCGIServer::FastCGIServer(const std::string &address,
                  RuntimeOption::ServerThreadJobLIFOSwitchThreshold,
                  RuntimeOption::ServerThreadJobMaxQueuingMilliSeconds,
                  RequestPriority::k_numPriorities) {
-  TSocketAddress sock_addr;
+  folly::SocketAddress sock_addr;
   if (useFileSocket) {
     sock_addr.setFromPath(address);
   } else if (address.empty()) {
@@ -227,7 +233,7 @@ void FastCGIServer::removeTakeoverListener(TakeoverListener* lisener) {
 }
 
 void FastCGIServer::start() {
-  m_socket.reset(new TAsyncServerSocket(m_worker.getEventBase()));
+  m_socket.reset(new apache::thrift::async::TAsyncServerSocket(m_worker.getEventBase()));
   try {
     m_socket->bind(m_socketConfig.bindAddress);
   } catch (const apache::thrift::transport::TTransportException& ex) {
@@ -238,6 +244,10 @@ void FastCGIServer::start() {
       throw FailedToListenException(m_socketConfig.bindAddress.getAddressStr(),
                                     m_socketConfig.bindAddress.getPort());
     }
+  }
+  if (m_socketConfig.bindAddress.getFamily() == AF_UNIX) {
+    auto path = m_socketConfig.bindAddress.getPath();
+    chmod(path.c_str(), 0760);
   }
   m_acceptor.reset(new FastCGIAcceptor(m_socketConfig, this));
   m_acceptor->init(m_socket.get(), m_worker.getEventBase());
@@ -276,7 +286,7 @@ void FastCGIServer::stop() {
       } else {
         terminateServer();
       }
-    });
+  });
 }
 
 void FastCGIServer::onConnectionsDrained() {
@@ -293,10 +303,18 @@ void FastCGIServer::timeoutExpired() noexcept {
 }
 
 void FastCGIServer::terminateServer() {
+  if (getStatus() != RunStatus::STOPPING) {
+    setStatus(RunStatus::STOPPING);
+  }
+
   m_worker.stopWhenIdle();
   m_dispatcher.stop();
 
   setStatus(RunStatus::STOPPED);
+
+  for (auto listener: m_listeners) {
+    listener->serverStopped(this);
+  }
 }
 
 bool FastCGIServer::canAccept() {

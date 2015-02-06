@@ -11,6 +11,8 @@
 open Utils
 open Typing_defs
 
+module SN = Naming_special_names
+
 (*****************************************************************************)
 (* Module checking the (co/contra)variance annotations (+/-).
  *
@@ -115,7 +117,7 @@ let reason_stack_to_string variance reason_stack =
     end reason_stack ""
     end
 
-let reason_to_string ~sign (pos, descr, variance) =
+let reason_to_string ~sign (_, descr, variance) =
   (if sign
   then variance_to_sign variance^" "
   else ""
@@ -218,7 +220,7 @@ let add_variance env name variance =
 
 let compose (pos, param_descr) from to_ =
   (* We don't really care how we deduced the variance that we are composing
-   * with (stack_to). That's because the decomposition could be in a different
+   * with (_stack_to). That's because the decomposition could be in a different
    * file and would be too hard to follow anyway.
    * Let's consider the following return type: A<T>.
    * Turns out A is declared as A<-T>.
@@ -230,20 +232,20 @@ let compose (pos, param_descr) from to_ =
    * Later on, the user can go and check the definition of A for herself.
    *)
   match from, to_ with
-  | Vcovariant stack_from, Vcovariant stack_to ->
+  | Vcovariant stack_from, Vcovariant _stack_to ->
       let reason = pos, param_descr, Pcovariant in
       Vcovariant (reason :: stack_from)
-  | Vcontravariant stack_from, Vcontravariant stack_to ->
+  | Vcontravariant stack_from, Vcontravariant _stack_to ->
       let reason = pos, param_descr, Pcontravariant in
       Vcovariant (reason :: stack_from)
-  | Vcovariant stack_from, Vcontravariant stack_to ->
+  | Vcovariant stack_from, Vcontravariant _stack_to ->
       let reason = pos, param_descr, Pcontravariant in
       Vcontravariant (reason :: stack_from)
-  | Vcontravariant stack_from, Vcovariant stack_to ->
+  | Vcontravariant stack_from, Vcovariant _stack_to ->
       let reason = pos, param_descr, Pcovariant in
       Vcontravariant (reason :: stack_from)
   | (Vinvariant _ as x), _ -> x
-  | _, Vinvariant (co, contra) ->
+  | _, Vinvariant (_co, _contra) ->
       let reason = pos, param_descr, Pinvariant in
       Vinvariant ([reason], [reason])
   | Vboth, x | x, Vboth -> x
@@ -309,7 +311,7 @@ let check_variance env tparam =
 
 let get_class_variance root (pos, class_name) =
   match class_name with
-  | "\\Awaitable" | "\\Continuation" as name ->
+  | name when (name = SN.Classes.cAwaitable) ->
       [Vcovariant [pos, Rtype_argument (Utils.strip_ns name), Pcovariant]]
   | _ ->
       let dep = Typing_deps.Dep.Class class_name in
@@ -402,7 +404,7 @@ and type_ root variance env (reason, ty) =
   match ty with
   | Tany -> env
   | Tmixed -> env
-  | Tarray (_, ty1, ty2) ->
+  | Tarray (ty1, ty2) ->
     let env = type_option root variance env ty1 in
     let env = type_option root variance env ty2 in
     env
@@ -464,6 +466,8 @@ and type_ root variance env (reason, ty) =
       end env variancel tyl
   | Ttuple tyl ->
       type_list root variance env tyl
+  (* when we add type params to type consts might need to change *)
+  | Taccess _ -> env
   | Tanon _ -> assert false
   | Tunresolved _ -> assert false
   | Tobject -> env

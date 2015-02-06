@@ -17,14 +17,16 @@
 #ifndef incl_HPHP_XBOX_SERVER_H_
 #define incl_HPHP_XBOX_SERVER_H_
 
-#include "hphp/runtime/base/complex-types.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/server/satellite-server.h"
 #include "hphp/runtime/server/server-task-event.h"
+#include "hphp/runtime/server/transport.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
+class Array;
 struct XboxServerInfo;
 class RPCRequestHandler;
 class XboxTransport;
@@ -101,6 +103,11 @@ public:
   virtual const char *getUrl();
   virtual const char *getRemoteHost() { return "127.0.0.1"; }
   virtual uint16_t getRemotePort() { return 0; }
+  virtual const char *getServerAddr() {
+    return RuntimeOption::ServerPrimaryIPv4.empty() ?
+      RuntimeOption::ServerPrimaryIPv6.c_str() :
+      RuntimeOption::ServerPrimaryIPv4.c_str();
+  }
 
   /**
    * Request data.

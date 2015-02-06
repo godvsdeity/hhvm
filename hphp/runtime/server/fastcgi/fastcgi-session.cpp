@@ -16,9 +16,9 @@
 
 #include "hphp/runtime/server/fastcgi/fastcgi-session.h"
 #include "hphp/util/logger.h"
-#include "folly/io/IOBuf.h"
-#include "folly/io/Cursor.h"
-#include "folly/Memory.h"
+#include <folly/io/IOBuf.h>
+#include <folly/io/Cursor.h>
+#include <folly/Memory.h>
 #include <limits>
 #include <map>
 
@@ -35,7 +35,7 @@ using folly::io::RWPrivateCursor;
 
 FastCGITransaction::FastCGITransaction(FastCGISession* session,
                                        RequestId request_id,
-                                       std::shared_ptr<ProtocolSessionHandler>
+                                       std::shared_ptr<FastCGITransport>
                                          handler)
   : m_phase(Phase::READ_KEY_LENGTH),
     m_readBuf(IOBufQueue::cacheChainLength()),
@@ -241,7 +241,6 @@ void FastCGITransaction::handleInvalidRecord() {
 
 FastCGISession::FastCGISession()
   : m_phase(Phase::AT_RECORD_BEGIN),
-    m_keepConn(true),
     m_maxConns(0),
     m_maxRequests(0) {
   m_transactions[0] = folly::make_unique<FastCGITransaction>(
@@ -258,7 +257,6 @@ size_t FastCGISession::onIngress(const IOBuf* chain) {
   if (m_phase == Phase::INVALID) {
     return 0;
   }
-  assert(m_keepConn);
 
   size_t available = chain ? chain->computeChainDataLength() : 0;
   size_t avail = available;
@@ -385,7 +383,7 @@ bool FastCGISession::parseRecordBody(Cursor& cursor, size_t& available) {
     writeUnknownType(m_recordType);
   }
 
-  return (m_contentLeft == 0);
+  return m_phase != Phase::INVALID && (m_contentLeft == 0);
 }
 
 bool FastCGISession::parseRecordEnd(Cursor& cursor, size_t& available) {
@@ -487,7 +485,6 @@ void FastCGISession::handleBeginRequest(Role role, ConnectionFlags flags) {
     return;
   }
   beginTransaction(m_requestId);
-  m_keepConn = (flags & ConnectionFlags::KEEP_CONN);
 }
 
 void FastCGISession::handleAbortRequest() {
@@ -575,13 +572,9 @@ void FastCGISession::handleGetValueResult(const std::string& key) {
 void FastCGISession::handleInvalidRecord() {
   Logger::Error("FastCGI protocol: received an invalid record");
   m_phase = Phase::INVALID;
-  if (m_callback) {
-    m_callback->onSessionError();
-  }
 }
 
 void FastCGISession::handleClose() {
-  //TODO if m_keepConn don't kill the connection but don't leak it either
   if (m_callback) {
     m_callback->onSessionClose();
   }

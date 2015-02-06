@@ -21,9 +21,11 @@
 #include "hphp/runtime/ext/xdebug/php5_xdebug/xdebug_var.h"
 
 #include "hphp/compiler/builtin_symbols.h"
+#include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/static-string-table.h"
+#include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/php-globals.h"
-#include "hphp/runtime/ext/ext_file.h"
+#include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/runtime/ext/std/ext_std_misc.h"
 #include "hphp/runtime/ext/url/ext_url.h"
 #include "hphp/runtime/vm/runtime.h"
@@ -83,7 +85,7 @@ namespace HPHP {
   FEATURE("encoding", "1", "iso-8859-1",  false)                               \
   FEATURE("language_name", "1", "PHP", false)                                  \
   FEATURE("language_supports_threads", "1", "0", false)                        \
-  FEATURE("language_version", "1", xdstrdup(k_HHVM_VERSION.c_str()), true)     \
+  FEATURE("language_version", "1", xdstrdup(HHVM_VERSION), true)               \
   FEATURE("max_children", "1",                                                 \
           xdebug_sprintf("%d", m_server.m_maxChildren), true)                  \
   FEATURE("max_data", "1", xdebug_sprintf("%d", m_server.m_maxData), true)     \
@@ -237,7 +239,7 @@ static Variant find_symbol(const String& name, int depth) {
   // If the result is unitialized, the property must be undefined
   Variant result = do_eval(eval_unit, depth);
   if (!result.isInitialized()) {
-    throw XDebugServer::ERROR_PROPERTY_NON_EXISTANT;
+    throw XDebugServer::ERROR_PROPERTY_NON_EXISTENT;
   }
   return result;
 }
@@ -1274,7 +1276,7 @@ public:
       // we ensure it's defined before grabbing it
       case XDebugContext::USER_CONSTANTS: {
         if (!f_defined(m_name)) {
-          throw XDebugServer::ERROR_PROPERTY_NON_EXISTANT;
+          throw XDebugServer::ERROR_PROPERTY_NON_EXISTENT;
         }
 
         // php5 xdebug adds "constant" facet, but this is not in the spec
@@ -1418,7 +1420,7 @@ public:
 
   void handleImpl(xdebug_xml_node& xml) override {
     // Grab the file as an array
-    Variant file = f_file(m_filename);
+    Variant file = HHVM_FN(file)(m_filename);
     if (!file.isArray()) {
       throw XDebugServer::ERROR_CANT_OPEN_FILE;
     }
@@ -1433,7 +1435,7 @@ public:
     }
 
     // Compute the source string. The initial size is arbitrary, we just guess
-    // 80 chracters per line
+    // 80 characters per line
     StringBuffer buf((m_endLine - m_beginLine) * 80);
     ArrayIter iter(source); iter.setPos(m_beginLine);
     for (int i = m_beginLine; i <= m_endLine && iter; i++, ++iter) {

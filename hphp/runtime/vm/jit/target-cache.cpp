@@ -22,7 +22,6 @@
 #include <limits>
 
 #include "hphp/runtime/base/strings.h"
-#include "hphp/runtime/base/complex-types.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -436,7 +435,8 @@ void handlePrimeCacheInit(Entry* mce,
   always_assert(false);
 #endif
 
-  TCA retAddr = TCA(framePtr->m_savedRip);
+  TCA toSmash =
+    mcg->backEnd().smashableCallFromReturn(TCA(framePtr->m_savedRip));
   TCA movAddr = TCA(rawTarget >> 1);
 
   // First fill the request local method cache for this call.
@@ -504,9 +504,7 @@ void handlePrimeCacheInit(Entry* mce,
 
   // Regardless of whether the inline cache was populated, smash the
   // call to start doing real dispatch.
-  //
-  // XXX Use of kCallLen here is a layering violation.
-  mcg->backEnd().smashCall(retAddr - x64::kCallLen,
+  mcg->backEnd().smashCall(toSmash,
                            reinterpret_cast<TCA>(handleSlowPath<fatal>));
 }
 

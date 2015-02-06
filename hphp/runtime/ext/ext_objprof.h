@@ -19,21 +19,17 @@
 #define incl_HPHP_EXT_OBJPROF_H_
 
 #include "hphp/runtime/base/base-includes.h"
-#include <semaphore.h>
 
 /*
  *                       Project ObjProf
  * What is it?
- * Approximated breakdown of allocated memory by object types.
+ * Breakdown of allocated memory by object types.
  *
  * How does it work?
- * We know an object is of certain type during runtime, this is done in php
- * through "instanceof". By running over allocated memory and looking for
- * pointers that point to a predefined set of "instanceof" targets, we can
- * at least approximately count the amount of instances we have of each type.
+ * We traverse all instances of ObjectData* to measure their memory.
  *
  * How do I use it?
- * Calling the objprof_get_data extension will trigger the scan.
+ * Call objprof_get_data to trigger the scan.
  */
 
 namespace HPHP {

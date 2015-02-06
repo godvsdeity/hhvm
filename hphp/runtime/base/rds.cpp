@@ -26,14 +26,13 @@
 #include <execinfo.h>
 #endif
 
-#include "folly/String.h"
-#include "folly/Hash.h"
-#include "folly/Bits.h"
+#include <folly/String.h>
+#include <folly/Hash.h>
+#include <folly/Bits.h>
 
 #include "hphp/util/maphuge.h"
 #include "hphp/util/logger.h"
 
-#include "hphp/runtime/base/complex-types.h"
 #include "hphp/runtime/base/rds-header.h"
 #include "hphp/runtime/vm/debug/debug.h"
 
@@ -401,7 +400,9 @@ bool testAndSetBit(size_t bit) {
 }
 
 bool isPersistentHandle(Handle handle) {
-  assert(handle >= 0 && handle < RuntimeOption::EvalJitTargetCacheSize);
+  static_assert(std::is_unsigned<Handle>::value,
+                "Handle is supposed to be unsigned");
+  assert(handle < RuntimeOption::EvalJitTargetCacheSize);
   return handle >= (unsigned)s_persistent_base;
 }
 
